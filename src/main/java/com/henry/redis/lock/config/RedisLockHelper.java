@@ -21,10 +21,12 @@ import lombok.AllArgsConstructor;
 @AutoConfigureAfter(RedisAutoConfiguration.class)
 @AllArgsConstructor
 public class RedisLockHelper {
+
     private static final String DELIMITER = "|";
-    private Executor customServiceExecutor;
-    private Executor asyncServiceExecutor;
-    private StringRedisTemplate stringRedisTemplate;
+
+    private final Executor asyncServiceExecutor;
+
+    private final StringRedisTemplate stringRedisTemplate;
 
     /**
      * 获取锁
@@ -40,38 +42,10 @@ public class RedisLockHelper {
      */
     public Boolean lock(String lockKey, final String uuid, long timeout, final TimeUnit unit) {
         final long milliseconds = Expiration.from(timeout, unit).getExpirationTimeInMilliseconds();
-        // 尝试去设置锁
-        Boolean success = stringRedisTemplate.opsForValue().setIfAbsent(lockKey,
-                                                                        (System.currentTimeMillis()
-                                                                         + milliseconds) + DELIMITER
-                                                                        + uuid);
-        // 如果设置好了锁,加上过期时间
-        if (success != null && success) {
-            stringRedisTemplate.expire(lockKey, timeout, TimeUnit.SECONDS);
-        } else {
-
-            final String oldVal = stringRedisTemplate.opsForValue().get(lockKey);
-            boolean resetLock = false;
-            // 如果在拿以前value的过程中没有拿到值(访问redis时延迟大, 没拿到数据, 过期了), 或者拿到了, 计算出来时间已经过期了
-            // 这两种情况下,都要重新加上一个新锁, 将锁的value设置为当前时间+过期时间+uuid
-            if (StringUtils.isEmpty(oldVal)) {
-                resetLock = true;
-            } else {
-                final String[] oldValues = oldVal.split(Pattern.quote(DELIMITER));
-                if (Long.parseLong(oldValues[0]) + 1 <= System.currentTimeMillis()) {
-                    resetLock = true;
-                }
-            }
-            if (resetLock) {
-                success = stringRedisTemplate.opsForValue().setIfAbsent(lockKey, (System.currentTimeMillis()
-                                                                                  + milliseconds) + DELIMITER
-                                                                                 + uuid);
-                if (success != null && success) {
-                    stringRedisTemplate.expire(lockKey, timeout, TimeUnit.SECONDS);
-                }
-            }
-        }
-        return success == null ? false : success;
+        // 尝试去设置锁, 因为已经有了timeout参数, 所以不用再考虑如果没有设置timeout的处理, 省了很多代码
+        return stringRedisTemplate.opsForValue().
+                setIfAbsent(lockKey, (System.currentTimeMillis() + milliseconds) + DELIMITER
+                                     + uuid, timeout, unit);
     }
 
     /**
@@ -113,7 +87,7 @@ public class RedisLockHelper {
         final String val = stringRedisTemplate.opsForValue().get(lockKey);
         if (StringUtils.isEmpty(val)) {return;}
         final String[] values = val.split(Pattern.quote(DELIMITER));
-        if (values.length <= 0) {
+        if (values.length <= 1) {
             return;
         }
         if (uuid.equals(values[1])) {
